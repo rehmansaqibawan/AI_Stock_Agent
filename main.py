@@ -1,90 +1,73 @@
-# this is the main file which will be used to make some of the calls to api,tools,chains and Agents while using langchain
-import os 
+import os
+import certifi
+import yfinance as yf
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-import yfinance as yf
-from langchain.agents import Agent, tools, initialize_agent
-import environ
-import certifi
-from langchain.agents import AgentType, Tool, initialize_agent
-from langchain_core.tools import tool, StructuredTool
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import MessagesPlaceholder
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
+from langchain.schema import HumanMessage
 from datetime import date
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.prompts import MessagesPlaceholder
-from langchain import hub
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.prompts import MessagesPlaceholder
 
-
-
-env = environ.Env()
-environ.Env.read_env()
-
-# Load the API key
+# Load environment variables
+load_dotenv()
 os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["GROQ_API_KEY"] = env("GROQ_API_KEY")
-print("GROQ_API_KEY:", os.getenv("GROQ_API_KEY"))
+
+# Initialize LLM with API key
 llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"))
 
+# Define stock price retrieval tool
+@tool
+def get_stock_price(symbol: str) -> str:
+    """Retrieves the current stock price given a stock symbol."""
+    try:
+        ticker = yf.Ticker(symbol)
+        todays_data = ticker.history(period='1d')
+        if todays_data.empty:
+            return f"No stock price data found for {symbol}. It may be delisted."
+        return f"The current stock price of {symbol} is ${todays_data['Close'].iloc[-1]:.2f}"
+    except Exception as e:
+        return f"Error retrieving stock price for {symbol}: {str(e)}"
 
-response = llm.invoke("What is the stock price of Apple?")
-print(response)
-
-llm = ChatGroq(temperature=0, groq_api_key=os.getenv("GROQ_API_KEY"))
-
-def get_stock_price(symbol):
-    ticker = yf.Ticker(symbol)
-    todays_data = ticker.history(period='1d')
-    return f"The current stock price of {symbol} is ${todays_data['Close'].iloc[-1]:.2f}"
-
-tools = [
-    Tool(
-        name="StockPrice",
-        func=get_stock_price,
-        description="Useful for getting the stock price of a company. The input should be the stock symbol of the company."
-    )
-]
-
-agent = initialize_agent(
-    tools, 
-    llm, 
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True
-)
-
-query = "What's the current stock price of Nvidia?"
-response = agent.invoke(query)
-print(response)
+# Additional tools for stock-related queries
+@tool
+def company_information(ticker: str) -> dict:
+    """Retrieves company information like industry, sector, and market capitalization."""
+    return yf.Ticker(ticker).get_info()
 
 @tool
-def get_stock_price(symbol):
-    """Use this tool to get the stock price of a company. The input should be the stock symbol of the company."""
-    ticker = yf.Ticker(symbol)
-    todays_data = ticker.history(period='1d')
-    return f"The current stock price of {symbol} is ${todays_data['Close'].iloc[-1]:.2f}"
+def last_dividend_and_earnings_date(ticker: str) -> dict:
+    """Retrieves the last dividend date and earnings release dates."""
+    return yf.Ticker(ticker).get_calendar()
 
-tools = [get_stock_price]
+@tool
+def stock_news(ticker: str) -> dict:
+    """Retrieves the latest news articles related to a stock ticker."""
+    return yf.Ticker(ticker).get_news()
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a helpful assistant. Try to answer user query using available tools.",
-        ),
-        MessagesPlaceholder(variable_name="messages"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ]
-)
+# Define tools list
+tools = [
+    get_stock_price,
+    company_information,
+    last_dividend_and_earnings_date,
+    stock_news,
+]
 
+# Define agent prompt
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant. Try to answer user queries using available tools."),
+    MessagesPlaceholder(variable_name="messages"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+])
 
-
+# Initialize agent and executor
 finance_agent = create_tool_calling_agent(llm, tools, prompt)
-
 finance_agent_executor = AgentExecutor(agent=finance_agent, tools=tools, verbose=True)
 
-from langchain_core.messages import HumanMessage
-
-response = finance_agent_executor.invoke({"messages": [HumanMessage(content="What is the stock price of Apple?")]})
-response
+# Get user input and execute query
+company_name = input("Enter the company name: ")
+response = finance_agent_executor.invoke(
+    {"messages": [HumanMessage(content=f"What is the stock price of {company_name}?")]}
+)
+print(response)
