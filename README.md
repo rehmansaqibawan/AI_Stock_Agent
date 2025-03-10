@@ -1,2 +1,2 @@
-AI_Stock_Agent
-Langchain agent with streamlit UI
+#AI_Stock_Agent
+(Langchain agent with streamlit UI.)
